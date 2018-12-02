@@ -7,14 +7,12 @@ from urllib.parse import quote
 from collections import defaultdict
 
 import pandas as pd
-import matrix_client.api
-import matplotlib.pyplot as plt
 
 
-__all__ = ['print_sorted_value', 'print_sorted_len', 'get_rooms_in_community', 'events_to_dataframe', 'get_all_messages_for_room', 'get_all_events']
+__all__ = ['filter_events_by_messages', 'print_sorted_value', 'print_sorted_len', 'get_rooms_in_community', 'events_to_dataframe', 'get_all_messages_for_room', 'get_all_events']
 
 
-def get_all_messages_for_room(room_id):
+def get_all_messages_for_room(api, room_id):
     """
     Use the matrix ``/messages`` API to back-paginate through the whole history of a room.
 
@@ -51,7 +49,7 @@ def events_to_dataframe(list_o_json):
     return pd.DataFrame(df).set_index("origin_server_ts")
 
 
-def get_all_events(rooms, cache=None, refresh_cache=False):
+def get_all_events(api, rooms, cache=None, refresh_cache=False):
     """
     Get all events in rooms.
 
@@ -65,7 +63,7 @@ def get_all_events(rooms, cache=None, refresh_cache=False):
         missing_keys = rooms.keys() - cache.keys()
         for key in missing_keys:
             print(f"fetching events for {key}")
-            cache[key] = events_to_dataframe(get_all_messages_for_room(rooms[key]))
+            cache[key] = events_to_dataframe(get_all_messages_for_room(api, rooms[key]))
             store[key] = cache[key]
         for key in cache.keys() - rooms.keys():
             cache.pop(key)
@@ -75,14 +73,14 @@ def get_all_events(rooms, cache=None, refresh_cache=False):
         messages = {}
         for key, id in ids.items():
             print(f"fetching events for {key}")
-            messages[key] = events_to_dataframe(get_all_messages_for_room(id))
+            messages[key] = events_to_dataframe(get_all_messages_for_room(api, id))
         if refresh_cache:
             with pd.HDFStore(cache) as store:
                 for channel, df in messages.items():
                     store.put(channel, df)
         return messages
 
-def get_rooms_in_community(communtiy):
+def get_rooms_in_community(api, communtiy):
     """
     Get a mapping of canonical alias (localpart) to room id for all rooms in a communtiy.
     """
@@ -107,3 +105,13 @@ def print_sorted_value(adict, reverse=True):
     for k in sorted(adict, key=adict.__getitem__, reverse=reverse):
         m = adict[k]
         print(f"{k}: {m}")
+
+
+def filter_events_by_messages(events):
+    """
+    Filter events so that only "m.room.message" events are kept.
+
+    events should be a dict of room events as returned by ``get_all_events``.
+    """
+
+    return {k: v[v['type'] == "m.room.message"] for k,v in events.items()}
