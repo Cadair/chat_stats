@@ -1,28 +1,36 @@
 """
-This file contains a set of helpers for analysing the history of groups of matrix rooms.
+This file contains a set of helpers for analysing the history of groups of
+matrix rooms.
 """
-import json
 import datetime
 from urllib.parse import quote
 from collections import defaultdict
+from matrix_client.errors import MatrixRequestError
 
 import pandas as pd
 
 
-__all__ = ['filter_events_by_messages', 'print_sorted_value', 'print_sorted_len', 'get_rooms_in_community', 'events_to_dataframe', 'get_all_messages_for_room', 'get_all_events']
+__all__ = ['flatten_dicts', 'filter_events_by_messages', 'print_sorted_value',
+           'print_sorted_len', 'get_rooms_in_community', 'events_to_dataframe',
+           'get_all_messages_for_room', 'get_all_events']
 
 
 def get_all_messages_for_room(api, room_id):
     """
-    Use the matrix ``/messages`` API to back-paginate through the whole history of a room.
+    Use the matrix ``/messages`` API to back-paginate through the whole history
+    of a room.
 
-    This will probably not work unless your homeserver has all the events locally.
+    This will probably not work unless your homeserver has all the events
+    locally.
     """
     token = ""
     token = api.get_room_messages(room_id, token, "b")['end']
     messages = []
     for i in range(100):
-        m1 = api.get_room_messages(room_id, token, "b", limit=1000)
+        try:
+            m1 = api.get_room_messages(room_id, token, "b", limit=1000)
+        except MatrixRequestError:
+            break
         token = m1['end']
         messages += m1['chunk']
         if not m1['chunk']:
@@ -32,9 +40,11 @@ def get_all_messages_for_room(api, room_id):
 
 def events_to_dataframe(list_o_json):
     """
-    Given a list of json events extract the interesting info into a pandas Dataframe.
+    Given a list of json events extract the interesting info into a pandas
+    Dataframe.
     """
-    extract_keys = ("origin_server_ts", "sender", "event_id", "type", "content")
+    extract_keys = ("origin_server_ts", "sender",
+                    "event_id", "type", "content")
     df = defaultdict(list)
     df["body"] = []
     for event in list_o_json:
@@ -71,7 +81,7 @@ def get_all_events(api, rooms, cache=None, refresh_cache=False):
         return cache
     else:
         messages = {}
-        for key, id in ids.items():
+        for key, id in rooms.items():
             print(f"fetching events for {key}")
             messages[key] = events_to_dataframe(get_all_messages_for_room(api, id))
         if refresh_cache:
@@ -80,9 +90,11 @@ def get_all_events(api, rooms, cache=None, refresh_cache=False):
                     store.put(channel, df)
         return messages
 
+
 def get_rooms_in_community(api, communtiy):
     """
-    Get a mapping of canonical alias (localpart) to room id for all rooms in a communtiy.
+    Get a mapping of canonical alias (localpart) to room id for all rooms in a
+    communtiy.
     """
     rooms = api._send("GET", "/groups/{}/rooms".format(quote(communtiy)))
     ids = {}
@@ -101,6 +113,7 @@ def print_sorted_len(adict, reverse=True):
         m = adict[k]
         print(f"{k}: {len(m)}")
 
+
 def print_sorted_value(adict, reverse=True):
     for k in sorted(adict, key=adict.__getitem__, reverse=reverse):
         m = adict[k]
@@ -115,3 +128,14 @@ def filter_events_by_messages(events):
     """
 
     return {k: v[v['type'] == "m.room.message"] for k,v in events.items()}
+
+
+def flatten_dicts(dicts):
+    """
+    Flatten all the dicts, but assume there are no key conflicts.
+    """
+    out = {}
+    for adict in dicts.values():
+        for key, value in adict.items():
+            out[key] = value
+    return out

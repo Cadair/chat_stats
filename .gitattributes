@@ -1,1 +1,2 @@
 astropy_messages.h5 filter=lfs diff=lfs merge=lfs -text
+sunpy_messages.h5 filter=lfs diff=lfs merge=lfs -text
