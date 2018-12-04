@@ -28,7 +28,7 @@ def get_all_messages_for_room(api, room_id):
     messages = []
     for i in range(100):
         try:
-            m1 = api.get_room_messages(room_id, token, "b", limit=1000)
+            m1 = api.get_room_messages(room_id, token, "b", limit=5000)
         except MatrixRequestError:
             break
         token = m1['end']
@@ -127,7 +127,9 @@ def filter_events_by_messages(events):
     events should be a dict of room events as returned by ``get_all_events``.
     """
 
-    return {k: v[v['type'] == "m.room.message"] for k,v in events.items()}
+    messages = {k: v[v['type'] == "m.room.message"] for k, v in events.items()}
+    messages = {k: v[v['sender'] != "@_neb_github_=40_cadair=3amatrix.org:matrix.org"] for k, v in messages.items()}
+    return messages
 
 
 def flatten_dicts(dicts):
@@ -139,3 +141,22 @@ def flatten_dicts(dicts):
         for key, value in adict.items():
             out[key] = value
     return out
+
+
+def get_display_names(api, senders, template):
+    display_names = []
+    for s in senders:
+        m = True
+        if s == "@Cadair:matrix.org":
+            s = "@cadair:cadair.com"
+        if ":" not in s:
+            s = template.format(s=s)
+            m = False
+        try:
+            dn = api.get_display_name(s)
+        except Exception:
+            dn = s
+        if m:
+            dn += "*"
+        display_names.append(dn)
+    return display_names
