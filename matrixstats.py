@@ -240,7 +240,6 @@ def calculate_active_senders(api, all_messages, top_n=20, template=None):
         df['median_body_len'] = groupbys[group].median()
 
     for group, df in active_senders.items():
-        top_n = 20
         df.loc[:top_n, 'display_name'] = get_display_names(api, df.index[:top_n], template=template)
 
         df = df[:top_n]
