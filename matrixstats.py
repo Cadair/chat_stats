@@ -11,7 +11,7 @@ import pandas as pd
 import numpy as np
 
 
-__all__ = ['flatten_dicts', 'filter_events_by_messages', 'print_sorted_value',
+__all__ = ['calculate_active_senders', 'get_display_names', 'load_messages', 'get_len_key', 'flatten_dicts', 'filter_events_by_messages', 'print_sorted_value',
            'print_sorted_len', 'get_rooms_in_community', 'events_to_dataframe',
            'get_all_messages_for_room', 'get_all_events']
 
@@ -134,6 +134,7 @@ def get_room_aliases_in_community(api, community):
         ids[name] = ca
     return ids
 
+
 def print_sorted_len(adict, reverse=True):
     for k in sorted(adict, key=lambda k: len(adict[k]), reverse=reverse):
         m = adict[k]
@@ -146,15 +147,15 @@ def print_sorted_value(adict, reverse=True):
         print(f"{k}: {m}")
 
 
-def filter_events_by_messages(events):
+def filter_events_by_messages(events, ignore_github=False):
     """
     Filter events so that only "m.room.message" events are kept.
 
     events should be a dict of room events as returned by ``get_all_events``.
     """
-    
     messages = {k: v[v['type'] == "m.room.message"] for k, v in events.items()}
-    messages = {k: v[v['sender'] != "@_neb_github_=40_cadair=3amatrix.org:matrix.org"] for k, v in messages.items()}
+    if ignore_github:
+        messages = {k: v[v['sender'] != "@_neb_github_=40_cadair=3amatrix.org:matrix.org"] for k, v in messages.items()}
     return messages
 
 
@@ -169,13 +170,13 @@ def flatten_dicts(dicts):
     return out
 
 
-def get_display_names(api, senders, template):
+def get_display_names(api, senders, template=None):
     display_names = []
     for s in senders:
         m = True
         if s == "@Cadair:matrix.org":
             s = "@cadair:cadair.com"
-        if ":" not in s:
+        if template is not None and ":" not in s:
             s = template.format(s=s)
             m = False
         try:
@@ -186,3 +187,67 @@ def get_display_names(api, senders, template):
             dn += "*"
         display_names.append(dn)
     return display_names
+
+
+def load_messages(api, ids, refresh_cache=False,
+                  stop_time=None, ignore_github=False,
+                  ignore_rooms=None):
+    # Get all the messages in all the rooms
+    events = {group: get_all_events(api, cids, cache=f"{group}_messages.h5",
+                                    refresh_cache=refresh_cache,
+                                    stop_time=stop_time)
+              for group, cids in ids.items()}
+    if not ignore_rooms:
+        ignore_rooms = []
+    events = {group: {k: v for k, v in events.items() if not v.empty and k not in ignore_rooms}
+              for group, events in events.items()}
+
+    # Filter by actual messages
+    messages = {group: filter_events_by_messages(gevents) for group, gevents in events.items()}
+
+    for gmessages in messages.values():
+        for m in gmessages.values():
+            m.loc[:, 'usender'] = [a.split(":")[0][1:].split("_")[-1] if "slack" in a else a for a in m['sender']]
+
+    # Add a message length column
+    for gmessages in messages.values():
+        for group, df in gmessages.items():
+            x = df['body'].apply(lambda x: len(x) if x else 0)
+            df.loc[:, 'body_len'] = x
+
+    return events, messages
+
+
+def get_len_key(adict, reverse=True):
+    n_messages = {}
+    for k in sorted(adict, key=lambda k: len(adict[k]), reverse=reverse):
+        m = adict[k]
+        n_messages[k] = len(m)
+    return n_messages
+
+
+def calculate_active_senders(api, all_messages, top_n=20, template=None):
+    """
+    Return a top_n long df group of number of messages and average length.
+    """
+    groupbys = {group: am.groupby("usender") for group, am in all_messages.items()}
+    active_senders = {group: pd.DataFrame(groupby.count()['body'].sort_values(ascending=False))
+                      for group, groupby in groupbys.items()}
+
+    for group, df in active_senders.items():
+        df.columns = ['number_of_messages']
+        df['mean_body_len'] = groupbys[group].mean()
+        df['median_body_len'] = groupbys[group].median()
+
+    for group, df in active_senders.items():
+        top_n = 20
+        df.loc[:top_n, 'display_name'] = get_display_names(api, df.index[:top_n], template=template)
+
+        df = df[:top_n]
+
+        df = df.reset_index()
+        df = df.set_index("display_name")
+
+        active_senders[group] = df
+
+    return active_senders
