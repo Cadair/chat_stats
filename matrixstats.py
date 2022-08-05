@@ -2,6 +2,8 @@
 This file contains a set of helpers for analysing the history of groups of
 matrix rooms.
 """
+import unicodedata
+import re
 import datetime
 from urllib.parse import quote
 from collections import defaultdict
@@ -11,9 +13,26 @@ import pandas as pd
 import numpy as np
 
 
-__all__ = ['calculate_active_senders', 'get_display_names', 'load_messages', 'get_len_key', 'flatten_dicts', 'filter_events_by_messages', 'print_sorted_value',
+__all__ = ['get_rooms_in_space', 'calculate_active_senders', 'get_display_names', 'load_messages', 'get_len_key', 'flatten_dicts', 'filter_events_by_messages', 'print_sorted_value',
            'print_sorted_len', 'get_rooms_in_community', 'events_to_dataframe',
            'get_all_messages_for_room', 'get_all_events']
+
+
+def slugify(value, allow_unicode=False):
+    """
+    Taken from https://github.com/django/django/blob/master/django/utils/text.py
+    Convert to ASCII if 'allow_unicode' is False. Convert spaces or repeated
+    dashes to single dashes. Remove characters that aren't alphanumerics,
+    underscores, or hyphens. Convert to lowercase. Also strip leading and
+    trailing whitespace, dashes, and underscores.
+    """
+    value = str(value)
+    if allow_unicode:
+        value = unicodedata.normalize('NFKC', value)
+    else:
+        value = unicodedata.normalize('NFKD', value).encode('ascii', 'ignore').decode('ascii')
+    value = re.sub(r'[^\w\s-]', '', value.lower())
+    return re.sub(r'[-\s]+', '-', value).strip('-_')
 
 
 def get_all_messages_for_room(api, room_id, stop_time=None):
@@ -37,6 +56,8 @@ def get_all_messages_for_room(api, room_id, stop_time=None):
             m1 = api.get_room_messages(room_id, token, "b", limit=5000)
         except MatrixRequestError:
             break
+        if not m1['chunk']:
+            break
         token = m1['end']
         # TODO: I am pretty sure this doesn't work
         if stop_time:
@@ -47,8 +68,6 @@ def get_all_messages_for_room(api, room_id, stop_time=None):
                 messages += m1['chunk']
                 return messages
         messages += m1['chunk']
-        if not m1['chunk']:
-            break
     return messages
 
 
@@ -81,6 +100,7 @@ def get_all_events(api, rooms, cache=None, refresh_cache=False, stop_time=None):
     if refresh_cache is true then the cache will be saved after
     getting the messages from the server.
     """
+    # key = slugify(key).replace("-", "_")
     if cache and not refresh_cache:
         store = pd.HDFStore(cache)
         cache = {key[1:]: store.get(key) for key in store.keys()}
@@ -95,13 +115,12 @@ def get_all_events(api, rooms, cache=None, refresh_cache=False, stop_time=None):
         return cache
     else:
         messages = {}
-        for key, id in rooms.items():
-            print(f"fetching events for {key}")
-            messages[key] = events_to_dataframe(get_all_messages_for_room(api, id, stop_time=stop_time))
-        if refresh_cache:
-            with pd.HDFStore(cache) as store:
-                for channel, df in messages.items():
-                    store.put(channel, df)
+        with pd.HDFStore(cache) as store:
+            for key, id in rooms.items():
+                print(f"fetching events for {key}")
+                df = events_to_dataframe(get_all_messages_for_room(api, id, stop_time=stop_time))
+                messages[key] = df
+                store.put(key, df)
         return messages
 
 
@@ -119,6 +138,42 @@ def get_rooms_in_community(api, communtiy):
         name = ca.split(":")[0][1:]
         name = name.replace("-", "_")
         ids[name] = room['room_id']
+    return ids
+
+
+def get_rooms_in_space(api, space, recursive=False):
+    """
+    Get a mapping of name to room id for all rooms in a
+    space.
+
+    If recursive is true then rooms from all subspaces will be listed.
+    """
+    space_roomid = space
+    if space.startswith("#"):
+        space_roomid = api.get_room_id(space)
+
+
+    room_create = api._send("GET", f"/rooms/{quote(space_roomid)}/state/m.room.create")
+    if room_create["type"] != "m.space":
+        raise TypeError("Room is not a space")
+
+    room_state = api._send("GET", f"/rooms/{quote(space_roomid)}/state")
+    ids = {}
+    for event in room_state:
+        if event["type"] != "m.space.child":
+            continue
+        room_id = event["state_key"]
+        room_state = api._send("GET", f"/rooms/{quote(room_id)}/state")
+        create = [ev for ev in room_state if ev["type"] == "m.room.create"][0]
+        if create["content"].get("type") == "m.space":
+            continue
+        name = [ev for ev in room_state if ev["type"] == "m.room.name"]
+        if not name:
+            print(f"Room {room_id} has no name, skipping")
+            continue
+        name = name[0]["content"]["name"]
+
+        ids[name] = room_id
     return ids
 
 
